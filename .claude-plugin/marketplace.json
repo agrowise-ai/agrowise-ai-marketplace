@@ -1,0 +1,12 @@
+{
+  "name": "agrowise-ai-marketplace",
+  "owner": {
+    "name": "Agrowise",
+    "url": "https://github.com/ebizuwo"
+  },
+  "metadata": {
+    "description": "Plugin marketplace for Agrowise Claude Code and Codex plugins.",
+    "version": "0.1.0"
+  },
+  "plugins": []
+}
