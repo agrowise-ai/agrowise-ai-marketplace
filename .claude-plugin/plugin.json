@@ -1,0 +1,13 @@
+{
+  "name": "agrowise-marketing",
+  "version": "0.1.0",
+  "description": "AgroWise brand + marketing automation: the brand canon as a loadable lens, plus workflows to evolve the positioning and produce on-brand, source-grounded content. Every output leads with the problem solved, cites extension-grade sources, and stays persona-matched to grower / owner / landscape-manager buyers.",
+  "author": {
+    "name": "ebiz"
+  },
+  "keywords": [
+    "agrowise",
+    "marketing",
+    "brand"
+  ]
+}

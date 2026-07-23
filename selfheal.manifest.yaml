@@ -1,0 +1,37 @@
+# selfheal.manifest.yaml — agrowise-marketing
+#
+# Opts this hosted plugin into eflow's marketplace-aware self-heal loop.
+# Contract: eflow/schemas/selfheal-manifest.schema.json. Stamped with the
+# recommended default globs so the plugin self-heals from birth; tune as it grows.
+
+# Plugin identity — MUST equal this plugin's plugins[].name in the root
+# .claude-plugin/marketplace.json (the loader cross-checks + refuses a mismatch).
+plugin: "agrowise-marketing"
+
+# Where fixes PR. For a hosted plugin this is the marketplace repo; `path` points
+# the tier globs below at the plugin's own subdir.
+repo:
+  remote: "ebizuwo/eflow"
+  base: "main"
+  path: "plugins/agrowise-marketing"
+
+# Path globs that compute a fix PR's tier from its real diff (relative to
+# repo.path). trivial ≙ low (OPEN, auto-merge eligible); core (GUARDED, always
+# human-gated). The brand canon (skills/agrowise-brand/**) is intentionally left
+# OPEN so positioning can iterate fast — but /agrowise-brand-evolve always gates
+# on the operator before writing it, so the human review lives in the workflow.
+tiers:
+  trivial:
+    - "commands/**"
+    - "skills/**"
+    - "README*"
+    - "**/*.md"
+  core:
+    - ".claude-plugin/**"
+    - "**/.mcp.json"
+    - "hooks/**"
+    - "**/*.json"
+
+# Commands that must pass (exit 0) before a fix PR opens. A fresh plugin ships
+# none; add cheap, deterministic checks (e.g. a copy-guardrail linter) as it grows.
+verify: []
