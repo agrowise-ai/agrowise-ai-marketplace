@@ -11,7 +11,7 @@ plugin: "agrowise-marketing"
 # Where fixes PR. For a hosted plugin this is the marketplace repo; `path` points
 # the tier globs below at the plugin's own subdir.
 repo:
-  remote: "ebizuwo/eflow"
+  remote: "agrowise-ai/agrowise-ai-marketplace"
   base: "main"
   path: "plugins/agrowise-marketing"
 

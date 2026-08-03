@@ -2,7 +2,11 @@
 
 AgroWise brand + marketing automation. Ships the **brand canon as a loadable lens** plus workflows to evolve the positioning and produce on-brand, source-grounded content. Every output leads with the problem solved, cites extension-grade sources, and stays persona-matched to grower / owner / landscape-manager buyers.
 
-A hosted plugin in the [eflow multi-plugin marketplace](../../plugins/README.md). It lives at `plugins/agrowise-marketing/` and is registered in the root `.claude-plugin/marketplace.json`.
+A hosted plugin in the [agrowise-ai marketplace](https://github.com/agrowise-ai/agrowise-ai-marketplace). It lives at `plugins/agrowise-marketing/` and is registered in the root `.claude-plugin/marketplace.json`.
+
+> Moved here from the `ebizuwo/eflow` marketplace on 2026-08-03. It was originally added
+> to eflow via PR #237 by mistake — this repo was scaffolded for it hours earlier the same
+> day. Git history was preserved via `git subtree split`.
 
 ## What's inside
 

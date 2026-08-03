@@ -8,5 +8,11 @@
     "description": "Plugin marketplace for Agrowise Claude Code and Codex plugins.",
     "version": "0.1.0"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "agrowise-marketing",
+      "source": "./plugins/agrowise-marketing",
+      "description": "AgroWise brand + marketing automation: the brand canon as a loadable lens, plus workflows to evolve the positioning and produce on-brand, source-grounded content."
+    }
+  ]
 }

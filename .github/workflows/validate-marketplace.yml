@@ -1,0 +1,119 @@
+name: Validate marketplace
+
+# Ported from ebizuwo/eflow's workflow of the same name when agrowise-marketing
+# moved here (2026-08-03). Deliberately DROPS eflow's final "Check INDEX.md is up
+# to date" step — that step depends on eflow's bin/generate-index.sh, which is not
+# part of this repo. Add it back if this marketplace ever grows an INDEX.md.
+
+on:
+  pull_request:
+    paths:
+      - ".claude-plugin/**"
+      - "**/.claude-plugin/**"
+      - "**/commands/**"
+      - "**/skills/**"
+      - "**/agents/**"
+      - ".github/workflows/validate-marketplace.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repo.
+permissions:
+  contents: read
+
+# Pinned to a known-good Claude Code CLI; bump deliberately.
+env:
+  CLAUDE_CLI_VERSION: "2.1.138"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -yqq jq
+
+      - name: Install Claude Code CLI (pinned)
+        run: |
+          set -euo pipefail
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
+          claude --version
+
+      - name: Validate marketplace manifest
+        # Catches manifest-shape errors AND duplicate plugin names.
+        run: |
+          set -euo pipefail
+          claude plugin validate .
+
+      - name: Verify per-plugin source paths and manifests
+        # `claude plugin validate` is shape-only and does NOT check source-path
+        # existence; this step closes that gap.
+        run: |
+          set -euo pipefail
+          missing=0
+          while IFS=$'\t' read -r name source; do
+            if [ ! -d "$source" ]; then
+              echo "::error::plugin '$name': source path missing: $source"
+              missing=$((missing + 1))
+              continue
+            fi
+            if [ ! -f "$source/.claude-plugin/plugin.json" ]; then
+              echo "::error::plugin '$name': $source/.claude-plugin/plugin.json missing"
+              missing=$((missing + 1))
+            fi
+          done < <(jq -r '.plugins[] | "\(.name)\t\(.source)"' .claude-plugin/marketplace.json)
+          if [ "$missing" -gt 0 ]; then
+            echo "::error::$missing plugin entr(y/ies) failed source-path validation"
+            exit 1
+          fi
+
+      - name: Validate each plugin manifest
+        # Target plugin.json explicitly — passing a directory would silently
+        # re-validate marketplace.json instead. Exit code captured explicitly,
+        # never piped through `tee` (a pipeline reports the LAST command's status).
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS=$'\t' read -r name source; do
+            pj="${source%/}/.claude-plugin/plugin.json"
+            echo "::group::claude plugin validate $pj  ($name)"
+            if claude plugin validate "$pj"; then
+              echo "::endgroup::"
+            else
+              rc=$?
+              echo "::endgroup::"
+              echo "::error::claude plugin validate failed for '$name' at $pj (exit $rc)"
+              fail=$((fail + 1))
+            fi
+          done < <(jq -r '.plugins[] | "\(.name)\t\(.source)"' .claude-plugin/marketplace.json)
+          if [ "$fail" -gt 0 ]; then
+            echo "::error::$fail plugin manifest(s) failed validation"
+            exit 1
+          fi
+
+      - name: Validate per-plugin selfheal manifests (when present)
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS=$'\t' read -r name source; do
+            manifest="${source%/}/selfheal.manifest.yaml"
+            [ -f "$manifest" ] || continue
+            echo "::group::yaml lint $manifest  ($name)"
+            # Pass the path via env, not string-interpolated into Python source:
+            # a path containing a quote would otherwise break out of the literal.
+            # (eflow's original workflow interpolates directly — fixed here.)
+            if MANIFEST="$manifest" python3 -c "import os, yaml; yaml.safe_load(open(os.environ['MANIFEST']))"; then
+              echo "::endgroup::"
+            else
+              rc=$?
+              echo "::endgroup::"
+              echo "::error::selfheal.manifest.yaml for '$name' at $manifest is not valid YAML (exit $rc)"
+              fail=$((fail + 1))
+            fi
+          done < <(jq -r '.plugins[] | "\(.name)\t\(.source)"' .claude-plugin/marketplace.json)
+          if [ "$fail" -gt 0 ]; then
+            echo "::error::$fail selfheal manifest(s) failed validation"
+            exit 1
+          fi
