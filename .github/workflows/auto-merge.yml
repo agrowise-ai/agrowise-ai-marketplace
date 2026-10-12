@@ -1,0 +1,149 @@
+name: Auto-merge
+
+# Merges every non-draft PR into the default branch once all of its checks are
+# green, so no PR waits for a human to click Merge. Gated variant of
+# canopy-roost's auto-enqueue.yml for repos with no required status checks
+# (free-plan private repos can't have them, and un-gated repos would merge an
+# armed PR immediately, before CI runs): this job watches every other check
+# on the PR's head commit and arms squash auto-merge only after they all pass,
+# pinned to that commit. On repos that do have required checks or a merge
+# queue, arming still goes through them.
+#
+# A failing check leaves the PR un-armed. Pushing a fix (by hand or by a
+# Claude session's CI auto-fix) re-runs this job on the new head.
+#
+# Token: the account that arms auto-merge is the account the merge commit is
+# attributed to, and a merge attributed to github-actions (GITHUB_TOKEN) does
+# not fire `push` workflows on the default branch, so deploys would silently
+# not run. The job uses secrets.AUTO_MERGE_TOKEN (falling back to
+# ERMIAS_GITHUB_TOKEN); with neither set it skips with a notice instead of
+# failing the PR.
+#
+# Ways to keep a PR from merging:
+#   * open it as a draft (ready_for_review arms it later), or
+#   * add the `hold` label (removing it re-runs the watch).
+#   `hold` added after arming does not cancel; use `gh pr merge --disable-auto <n>`.
+#   Bot-authored PRs are skipped unless they carry the `auto-merge-bots` label.
+#   Comment exactly `/enqueue` on a PR to re-run the watch.
+#
+# Runner: vars.AUTO_MERGE_RUNNER overrides ubuntu-latest (the job needs gh
+# and jq). It sleeps between polls, so its cost is roughly the length of the
+# repo's CI per push.
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize, unlabeled]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  # One watcher per PR; a new push cancels the watch on the old head.
+  group: auto-merge-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event.issue.pull_request != null && startsWith(github.event.comment.body, '/enqueue'))
+    runs-on: ${{ vars.AUTO_MERGE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    steps:
+      - name: Wait for checks, then arm
+        env:
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN || secrets.ERMIAS_GITHUB_TOKEN }}
+          R: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          REMOVED_LABEL: ${{ github.event.label.name }}
+          # Passed via env, never interpolated, so a comment cannot inject shell.
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SELF_WORKFLOW: ${{ github.workflow }}
+        run: |
+          set -euo pipefail
+
+          skip() {
+            echo "skip: $1 (PR #$PR, $EVENT_NAME/$EVENT_ACTION)"
+            echo "Auto-merge skipped PR #$PR: $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::notice::No AUTO_MERGE_TOKEN or ERMIAS_GITHUB_TOKEN secret; auto-merge is off for this repo."
+            skip "no merge token configured"
+          fi
+          if [[ "$EVENT_NAME" == "pull_request" && "$EVENT_ACTION" == "unlabeled" && "$REMOVED_LABEL" != "hold" ]]; then
+            skip "removed label '$REMOVED_LABEL' is not 'hold'"
+          fi
+          if [[ "$EVENT_NAME" == "issue_comment" ]]; then
+            trimmed="$(printf '%s' "$COMMENT_BODY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            [[ "$trimmed" == "/enqueue" ]] || skip "comment is not exactly '/enqueue'"
+          fi
+
+          default_branch="$(gh api "repos/$R" --jq .default_branch)"
+
+          pr_gate() {
+            pr_json="$(gh api "repos/$R/pulls/$PR")"
+            state="$(jq -r '.state' <<<"$pr_json")"
+            draft="$(jq -r '.draft' <<<"$pr_json")"
+            base="$(jq -r '.base.ref' <<<"$pr_json")"
+            author="$(jq -r '.user.login' <<<"$pr_json")"
+            author_type="$(jq -r '.user.type' <<<"$pr_json")"
+            labels="$(jq -r '[.labels[].name] | join(",")' <<<"$pr_json")"
+            head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+            [[ "$state" == "open" ]] || skip "PR is $state"
+            [[ "$base" == "$default_branch" ]] || skip "base is '$base', not $default_branch"
+            [[ "$draft" != "true" ]] || skip "PR is a draft"
+            [[ ",$labels," != *",hold,"* ]] || skip "PR carries the 'hold' label"
+            if [[ "$author" == *'[bot]' || "$author_type" == "Bot" ]] && [[ ",$labels," != *",auto-merge-bots,"* ]]; then
+              skip "author '$author' is a bot without the 'auto-merge-bots' label"
+            fi
+          }
+          pr_gate
+          sha="$head_sha"
+          echo "Watching checks on $sha"
+
+          # Give other workflows and external statuses time to register.
+          sleep 45
+
+          while true; do
+            pr_gate
+            [[ "$head_sha" == "$sha" ]] || skip "head moved to $head_sha; the new push re-runs this job"
+            # Everything except this workflow's own check. `gh pr checks`
+            # exits non-zero when checks are pending/failing or absent, so
+            # read the JSON regardless of its exit code.
+            checks="$(gh pr checks "$PR" --repo "$R" --json name,bucket,workflow 2>/dev/null || true)"
+            [[ -n "$checks" ]] || checks='[]'
+            others="$(jq --arg self "$SELF_WORKFLOW" '[.[] | select(.workflow != $self)]' <<<"$checks")"
+            failed="$(jq -r '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | join(", ")' <<<"$others")"
+            pending="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$others")"
+            total="$(jq 'length' <<<"$others")"
+            [[ -z "$failed" ]] || skip "checks failed: $failed"
+            [[ "$pending" -gt 0 ]] || break
+            echo "$pending of $total checks pending; waiting"
+            sleep 30
+          done
+          echo "All $total checks passed on $sha"
+
+          # Native auto-merge needs a paid plan on private repos; GitHub
+          # silently keeps allow_auto_merge off there. The checks are already
+          # green, so merge directly instead of arming.
+          mode=()
+          verb="merged"
+          if [[ "$(gh api "repos/$R" --jq .allow_auto_merge)" == "true" ]]; then
+            mode=(--auto)
+            verb="armed auto-merge on"
+          fi
+          set +e
+          out="$(gh pr merge "$PR" --repo "$R" --squash "${mode[@]}" --match-head-commit "$sha" 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [[ $rc -ne 0 ]] && ! grep -qi "already" <<<"$out"; then
+            echo "::error::gh pr merge failed for PR #$PR (exit $rc): merge it by hand with gh pr merge $PR --squash --repo $R"
+            exit "$rc"
+          fi
+          echo "Auto-merge $verb PR #$PR at $sha after $total green checks." >> "$GITHUB_STEP_SUMMARY"
