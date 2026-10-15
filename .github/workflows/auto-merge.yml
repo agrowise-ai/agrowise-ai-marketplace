@@ -36,8 +36,12 @@ on:
     types: [created]
 
 concurrency:
-  # One watcher per PR; a new push cancels the watch on the old head.
-  group: auto-merge-${{ github.event.pull_request.number || github.event.issue.number }}
+  # One watcher per PR; a new push or an `/enqueue` comment cancels the watch
+  # in progress and starts a fresh one. Concurrency is resolved before the
+  # job's `if:`, so every other comment (Vercel's preview comment, review
+  # chatter) gets a group of its own, keyed on the comment id; otherwise its
+  # run, which the `if:` then skips, would cancel the PR's watcher.
+  group: auto-merge-${{ github.event.pull_request.number || github.event.issue.number }}${{ github.event_name == 'issue_comment' && !startsWith(github.event.comment.body, '/enqueue') && format('-comment-{0}', github.event.comment.id) || '' }}
   cancel-in-progress: true
 
 permissions:
